@@ -1,2 +1,2 @@
 # summer-efficientSR
-that is a code epository for yqliu and jumluo
+that is a code repository for yqliu and jumluo
