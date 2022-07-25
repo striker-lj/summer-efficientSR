@@ -20,7 +20,7 @@ def drop_path(x, drop_prob: float = 0., training: bool = False):
     if drop_prob == 0. or not training:
         return x
     keep_prob = 1 - drop_prob
-    shape = (x.shape[0], ) + (1, ) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
     random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
     random_tensor.floor_()  # binarize
     output = x.div(keep_prob) * random_tensor
@@ -107,29 +107,37 @@ class WindowAttention(nn.Module):
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type='vanilla', d_hid=32, f=8, Dattn_dropout=0.1):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop_rate=0.,
+                 attn_type='vanilla', d_hid=32, f=8, Dattn_dropout=0.1):
 
         super().__init__()
         self.dim = dim
         self.f = f
+        self.qkv_bias = qkv_bias
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim**-0.5
+        self.scale = qk_scale or head_dim ** -0.5
+        self.proj_drop_rate = proj_drop_rate
+        self.d_hid = d_hid
+        self.f = f
 
-        # print(type(window_size))
 
         # add multiple attention mechanism
-        self.w_1 = nn.Linear(dim//num_heads, d_hid) #由原始input的维度d_k到中间的维度d_hid
-        self.w_2 = nn.Linear(d_hid,64) #由中间的维度d_hid到设置的最大维度N
-        self.relu = nn.ReLU()
+
         self.dropout = nn.Dropout(Dattn_dropout)
 
-        self.f_a = nn.Linear(dim//num_heads, f)
-        self.f_b = nn.Linear(dim//num_heads, 64//f)
+        self.q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+
+        self.attn_drop = nn.Dropout(attn_drop)
 
         # self.batch_size = batch_size
         self.attn_type = attn_type.lower()
+
+        self.attn_init()
+
+        self.softmax = nn.Softmax(dim=-1)
 
         # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
@@ -148,15 +156,30 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
         self.register_buffer('relative_position_index', relative_position_index)
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.v = nn.Linear(dim, dim, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
-
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
         trunc_normal_(self.relative_position_bias_table, std=.02)
-        self.softmax = nn.Softmax(dim=-1)
+
+
+    def attn_init(self, ):
+        if self.attn_type == 'vanilla':
+            self.k = nn.Linear(self.dim, self.dim, bias=self.qkv_bias)
+
+            self.proj = nn.Linear(self.dim, self.dim)
+            self.proj_drop = nn.Dropout(self.proj_drop_rate)
+
+        elif self.attn_type == 'dense':
+            self.w_1 = nn.Linear(self.dim // self.num_heads, self.d_hid)  # 由原始input的维度d_k到中间的维度d_hid
+            self.w_2 = nn.Linear(self.d_hid, 64)  # 由中间的维度d_hid到设置的最大维度N
+            self.relu = nn.ReLU()
+
+        elif self.attn_type == 'fact_dense_pose':
+            self.f_a = nn.Linear(self.dim // self.num_heads, self.f)
+            self.f_b = nn.Linear(self.dim // self.num_heads, 64 // self.f)
+
+            # self.f_a = nn.Linear(self.dim // self.num_heads, self.dim // self.num_heads)
+            # self.f_b = nn.Linear(self.dim // self.num_heads, self.dim // self.num_heads)
+
+
+
 
     def forward(self, x, mask=None):
         """
@@ -166,19 +189,21 @@ class WindowAttention(nn.Module):
         """
         b_, n, c = x.shape
 
-        # qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, c // self.num_heads).permute(2, 0, 3, 1, 4)
-        # q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
-
 
         if self.attn_type == "vanilla":
-            qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, c // self.num_heads).permute(2, 0, 3, 1, 4)
-            q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+
+            q = self.q(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            k = self.k(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+
             q = q * self.scale
-            print('q.shape', q.shape)
+
+            # print('q.shape', q.shape)
             attn = (q @ k.transpose(-2, -1))
-            print('attn.shape', attn.shape)
+            # print('attn.shape', attn.shape)
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
             attn = attn + relative_position_bias.unsqueeze(0)
 
@@ -193,17 +218,16 @@ class WindowAttention(nn.Module):
             attn = self.attn_drop(attn)
 
             x = (attn @ v).transpose(1, 2).reshape(b_, n, c)
-            x = self.proj(x)
-            x = self.proj_drop(x)
+
+            # x = self.proj(x)
+            # x = self.proj_drop(x)
 
         elif self.attn_type == "dense":
             v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
             q = x.reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
 
-            attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
-            
-            # print('q.shape', q.shape)
-            # print('attn.shape', attn.shape)
+            attn = self.w_2(self.relu(self.w_1(q)))
+
             if mask is not None:
                 nw = mask.shape[0]
                 attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
@@ -211,21 +235,39 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
             else:
                 attn = self.softmax(attn)
-            
+
             attn = self.dropout(attn)
             x = torch.matmul(attn, v)
-            # print('x_shape:',x.shape)
+
+        elif self.attn_type == "dense_mlp1":
+            v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            q = x.reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+
+            attn = self.relu(self.w_1(q))
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v)
+
 
         elif self.attn_type == "dense_pose":
             qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, c // self.num_heads).permute(2, 0, 3, 1, 4)
             q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
-            attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
-            
+            attn = self.w_2(self.relu(self.w_1(q)))[:, :, :, :64]
+
             print('attn_device', attn.device)
 
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
             attn = attn + relative_position_bias.unsqueeze(0)
 
@@ -236,7 +278,7 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
             else:
                 attn = self.softmax(attn)
-            
+
             attn = self.dropout(attn)
             x = torch.matmul(attn, v)
 
@@ -244,8 +286,8 @@ class WindowAttention(nn.Module):
             v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
             q = x.reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
 
-            h_a = torch.repeat_interleave(self.f_a(q), 64//self.f, -1)[:, :, :, :64]
-            h_b = torch.repeat_interleave(self.f_b(q), self.f, -1)[:, :, :, :64]
+            h_a = torch.repeat_interleave(self.f_a(q), 4, -1)
+            h_b = torch.repeat_interleave(self.f_b(q), 4, -1)
             attn = torch.matmul(h_a, h_b.transpose(2, 3))
 
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
@@ -819,7 +861,7 @@ class UpsampleOneStep(nn.Sequential):
         self.num_feat = num_feat
         self.input_resolution = input_resolution
         m = []
-        m.append(nn.Conv2d(num_feat, (scale**2) * num_out_ch, 3, 1, 1))
+        m.append(nn.Conv2d(num_feat, (scale ** 2) * num_out_ch, 3, 1, 1))
         m.append(nn.PixelShuffle(scale))
         super(UpsampleOneStep, self).__init__(*m)
 
@@ -830,7 +872,7 @@ class UpsampleOneStep(nn.Sequential):
 
 
 @ARCH_REGISTRY.register()
-class SynSwinIR(nn.Module):
+class SynSwinIR_Fix0(nn.Module):
     r""" SwinIR
         A PyTorch impl of : `SwinIR: Image Restoration Using Swin Transformer`, based on Swin Transformer.
 
@@ -1072,7 +1114,6 @@ class SynSwinIR(nn.Module):
         flops += h * w * 3 * self.embed_dim * self.embed_dim
         flops += self.upsample.flops()
         return flops
-
 
 # if __name__ == '__main__':
 #     upscale = 4
