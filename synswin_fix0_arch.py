@@ -422,7 +422,7 @@ class SwinTransformerBlock(nn.Module):
             qk_scale=qk_scale,
             attn_drop=attn_drop,
             attn_type=attn_type,
-            proj_drop=drop)
+            proj_drop_rate=drop)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -924,7 +924,7 @@ class SynSwinIR_Fix0(nn.Module):
                  resi_connection='1conv',
                  attn_type='vanilla',
                  **kwargs):
-        super(SynSwinIR, self).__init__()
+        super(SynSwinIR_Fix0, self).__init__()
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
