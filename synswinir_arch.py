@@ -177,6 +177,8 @@ class WindowAttention(nn.Module):
             print('q.shape', q.shape)
             attn = (q @ k.transpose(-2, -1))
             print('attn.shape', attn.shape)
+
+
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
                 self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
@@ -264,6 +266,38 @@ class WindowAttention(nn.Module):
 
             attn = self.dropout(attn)
             x = torch.matmul(attn, v)
+
+        if self.attn_type == "vanilla":
+
+            q = self.q(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            k = self.k(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+
+            q = q * self.scale
+
+            # print('q.shape', q.shape)
+            attn = (q @ k.transpose(-2, -1))
+            # print('attn.shape', attn.shape)
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+
+            attn = self.attn_drop(attn)
+
+            x = (attn @ v).transpose(1, 2).reshape(b_, n, c)
+
+            # x = self.proj(x)
+            # x = self.proj_drop(x)
 
         # elif self.attn_type == 'random':
         #     attn = torch.randn(b_, self.num_heads, 64, 64)

@@ -127,7 +127,7 @@ class WindowAttention(nn.Module):
 
         self.dropout = nn.Dropout(Dattn_dropout)
 
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
+        # self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.v = nn.Linear(dim, dim, bias=qkv_bias)
 
         self.attn_drop = nn.Dropout(attn_drop)
@@ -162,13 +162,21 @@ class WindowAttention(nn.Module):
     def attn_init(self, ):
         if self.attn_type == 'vanilla':
             self.k = nn.Linear(self.dim, self.dim, bias=self.qkv_bias)
+            self.q = nn.Linear(self.dim, self.dim, bias=self.qkv_bias)
 
-            self.proj = nn.Linear(self.dim, self.dim)
-            self.proj_drop = nn.Dropout(self.proj_drop_rate)
+            #self.proj = nn.Linear(self.dim, self.dim)
+            #self.proj_drop = nn.Dropout(self.proj_drop_rate)
 
         elif self.attn_type == 'dense':
             self.w_1 = nn.Linear(self.dim // self.num_heads, self.d_hid)  # 由原始input的维度d_k到中间的维度d_hid
             self.w_2 = nn.Linear(self.d_hid, 64)  # 由中间的维度d_hid到设置的最大维度N
+            self.relu = nn.ReLU()
+            
+            # self.proj = nn.Linear(self.dim, self.dim)
+            # self.proj_drop = nn.Dropout(self.proj_drop_rate)
+            
+        elif self.attn_type == 'dense_mlp1':
+            self.w_1 = nn.Linear(self.dim // self.num_heads, 64)  # 由原始input的维度d_k到中间的维度d_hid
             self.relu = nn.ReLU()
 
         elif self.attn_type == 'fact_dense_pose':
@@ -178,6 +186,9 @@ class WindowAttention(nn.Module):
             # self.f_a = nn.Linear(self.dim // self.num_heads, self.dim // self.num_heads)
             # self.f_b = nn.Linear(self.dim // self.num_heads, self.dim // self.num_heads)
 
+        elif self.attn_type == 'fact_dense_pose1':
+            self.f_a = nn.Linear(self.dim, 4 * self.num_heads)
+            self.f_b = nn.Linear(self.dim, 16 * self.num_heads)
 
 
 
@@ -191,6 +202,38 @@ class WindowAttention(nn.Module):
 
 
         if self.attn_type == "vanilla":
+
+            q = self.q(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            k = self.k(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+
+            # q = q * self.scale
+
+            # print('q.shape', q.shape)
+            attn = (q @ k.transpose(-2, -1))
+            # print('attn.shape', attn.shape)
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+
+            attn = self.attn_drop(attn)
+
+            x = (attn @ v).transpose(1, 2).reshape(b_, n, c)
+
+            # x = self.proj(x)
+            # x = self.proj_drop(x)
+
+        elif self.attn_type == "vanilla_qkvout":
 
             q = self.q(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
             k = self.k(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
@@ -226,6 +269,8 @@ class WindowAttention(nn.Module):
             v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
             q = x.reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
 
+            #q = self.q(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3) #028
+
             attn = self.w_2(self.relu(self.w_1(q)))
 
             if mask is not None:
@@ -237,7 +282,10 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
 
             attn = self.dropout(attn)
-            x = torch.matmul(attn, v)
+            x = torch.matmul(attn, v).transpose(1, 2).reshape(b_, n, c)
+            
+            # x = self.proj(x)
+            # x = self.proj_drop(x)
 
         elif self.attn_type == "dense_mlp1":
             v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
@@ -254,7 +302,7 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
 
             attn = self.dropout(attn)
-            x = torch.matmul(attn, v)
+            x = torch.matmul(attn, v).transpose(1, 2).reshape(b_, n, c)
 
 
         elif self.attn_type == "dense_pose":
@@ -280,14 +328,19 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
 
             attn = self.dropout(attn)
-            x = torch.matmul(attn, v)
+            x = torch.matmul(attn, v).transpose(1, 2).reshape(b_, n, c)
 
         elif self.attn_type == "fact_dense_pose":
             v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
             q = x.reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
-
-            h_a = torch.repeat_interleave(self.f_a(q), 4, -1)
-            h_b = torch.repeat_interleave(self.f_b(q), 4, -1)
+            
+            # h_a = torch.repeat_interleave(self.f_a(q), 64 // self.f, -1)
+            h_a = torch.repeat_interleave(self.f_a(q), 2, -1)
+            # h_b = torch.repeat_interleave(self.f_b(q), self.f, -1)
+            h_b = torch.repeat_interleave(self.f_b(q), 2, -1)
+            
+            h_a = h_a * self.scale
+            
             attn = torch.matmul(h_a, h_b.transpose(2, 3))
 
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
@@ -305,7 +358,39 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
 
             attn = self.dropout(attn)
-            x = torch.matmul(attn, v)
+            x = torch.matmul(attn, v).transpose(1, 2).reshape(b_, n, c)
+
+        elif self.attn_type == "fact_dense_pose1":
+            v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+
+            a = self.f_a(x).reshape(b_, n, self.num_heads, 4).permute(0, 2, 1, 3)
+            b = self.f_b(x).reshape(b_, n, self.num_heads, 16).permute(0, 2, 1, 3)
+
+
+            h_a = torch.repeat_interleave(a, 16, -1)
+            h_b = torch.repeat_interleave(b, 4, -1)
+
+            h_a = h_a * self.scale * 0.25
+
+            attn = torch.matmul(h_a, h_b.transpose(2, 3))
+
+
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v).transpose(1, 2).reshape(b_, n, c)
 
         # elif self.attn_type == 'random':
         #     attn = torch.randn(b_, self.num_heads, 64, 64)
@@ -482,8 +567,11 @@ class SwinTransformerBlock(nn.Module):
         else:
             attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size).to(x.device))
 
+        #print('attn_windows.shape', attn_windows.shape)
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, c)
+        
+        #print('attn_windows.shape', attn_windows.shape)
         shifted_x = window_reverse(attn_windows, self.window_size, h, w)  # b h' w' c
 
         # reverse cyclic shift
@@ -1115,24 +1203,34 @@ class SynSwinIR_Fix0(nn.Module):
         flops += self.upsample.flops()
         return flops
 
-# if __name__ == '__main__':
-#     upscale = 4
-#     window_size = 8
-#     height = (1024 // upscale // window_size + 1) * window_size
-#     width = (720 // upscale // window_size + 1) * window_size
-#     model = SynSwinIR(
-#         upscale=2,
-#         img_size=(height, width),
-#         window_size=window_size,
-#         img_range=1.,
-#         depths=[6, 6, 6, 6],
-#         embed_dim=60,
-#         num_heads=[6, 6, 6, 6],
-#         mlp_ratio=2,
-#         upsampler='pixelshuffledirect')
-#     # print(model)
-#     print(height, width, model.flops() / 1e9)
+if __name__ == '__main__':
+    # upscale = 4
+    # window_size = 8
+    # height = (1024 // upscale // window_size + 1) * window_size
+    # width = (720 // upscale // window_size + 1) * window_size
+    # model = SynSwinIR(
+    #     upscale=2,
+    #     img_size=(height, width),
+    #     window_size=window_size,
+    #     img_range=1.,
+    #     depths=[6, 6, 6, 6],
+    #     embed_dim=60,
+    #     num_heads=[6, 6, 6, 6],
+    #     mlp_ratio=2,
+    #     upsampler='pixelshuffledirect')
+    # # print(model)
+    # print(height, width, model.flops() / 1e9)
+    #
+    # x = torch.randn((1, 3, height, width))
+    # x = model(x)
+    # print(x.shape)
 
-#     x = torch.randn((1, 3, height, width))
-#     x = model(x)
-#     print(x.shape)
+    a = torch.randn(2,3)
+    b = torch.randn(2,3)
+    c = torch.matmul(a, b.transpose(0, 1))
+    print('c', c)
+    a1 = torch.repeat_interleave(a, 2, -1)
+    b1 = torch.repeat_interleave(b, 2, -1)
+    c1 = torch.matmul(a1, b1.transpose(0, 1))
+
+    print('c1', c1)
