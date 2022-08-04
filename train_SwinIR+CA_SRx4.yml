@@ -76,8 +76,8 @@ network_g:
   upsampler: 'pixelshuffle'
   resi_connection: '1conv'
   attn_type: 'vanilla'
-  num_block: 2
   SE_reduction: 6
+  MLP_use: true
 
 # path
 path:

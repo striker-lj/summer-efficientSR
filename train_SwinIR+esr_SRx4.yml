@@ -1,5 +1,5 @@
 # general settings
-name: 041_train_SwinIR+SynDense_Fix0_SRx4_P48W8_DF2K_500k_B8G1
+name: 042_train_SwinIR+esr_SRx4_P48W8_DF2K_500k_B8G1
 model_type: SwinIRModel
 scale: 4
 num_gpu: auto
@@ -10,8 +10,8 @@ datasets:
   train:
     name: DF2K
     type: PairedImageDataset
-    dataroot_gt: /home/yqliu/datasets/DF2K/DF2K_train_HR_sub.lmdb
-    dataroot_lq: /home/yqliu/datasets/DF2K/DF2K_train_LR_bicubic_X4_sub.lmdb
+    dataroot_gt: datasets/DF2K/DF2K_train_HR_sub.lmdb
+    dataroot_lq: datasets/DF2K/DF2K_train_LR_bicubic_X4_sub.lmdb
     # meta_info_file: basicsr/data/meta_info/meta_info_DIV2K800sub_GT.txt
     filename_tmpl: '{}'
     io_backend:
@@ -32,38 +32,38 @@ datasets:
   val:
     name: Set5
     type: PairedImageDataset
-    dataroot_gt: /home/yqliu/datasets/Set5/HR/
-    dataroot_lq: /home/yqliu/datasets/Set5/LRbicx4/
+    dataroot_gt: datasets/Set5/GTmod12
+    dataroot_lq: datasets/Set5/LRbicx4
     io_backend:
       type: disk
-
+  
   val_1:
     name: Set14
     type: PairedImageDataset
-    dataroot_gt: /home/yqliu/datasets/Set14/HR/
-    dataroot_lq: /home/yqliu/datasets/Set14/LRbicx4/
+    dataroot_gt: datasets/Set14/GTmod12
+    dataroot_lq: datasets/Set14/LRbicx4
     io_backend:
       type: disk
-
-  val_2: # the 2nd test dataset
+  
+  val_2:  # the 2nd test dataset
     name: B100
     type: PairedImageDataset
-    dataroot_gt: /home/yqliu/datasets/B100/HR/
-    dataroot_lq: /home/yqliu/datasets/B100/LRbicx4/
+    dataroot_gt: datasets/B100/HR
+    dataroot_lq: datasets/B100/LR_bicubic/X4
     io_backend:
       type: disk
-      
-  val_3: # the 2nd test dataset
+  
+  val_3:  # the 2nd test dataset
     name: Urban100
     type: PairedImageDataset
-    dataroot_gt: /home/yqliu/datasets/Urban100/GTmod4/
-    dataroot_lq: /home/yqliu/datasets/Urban100/mod8LRbicx4/
+    dataroot_gt: datasets/Urban100/HR
+    dataroot_lq: datasets/Urban100/LR_bicubic/X4
     io_backend:
       type: disk
 
 # network structures
 network_g:
-  type: SynSwinIR_sr
+  type: SynSwinIR_esr
   upscale: 4
   in_chans: 3
   img_size: 48
@@ -76,9 +76,9 @@ network_g:
   upsampler: 'pixelshuffle'
   resi_connection: '1conv'
   attn_type: 'vanilla'
-  num_block: 1,
-  num_grow_ch: 30,
-  SE_reduction:6,
+  num_block: 1
+  num_grow_ch: 30
+  SE_reduction: 6
 
 # path
 path:
